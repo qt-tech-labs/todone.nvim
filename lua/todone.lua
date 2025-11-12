@@ -256,7 +256,11 @@ local function create_floating_window(opts)
 
 	local toggle_task = function()
 		local line = vim.api.nvim_get_current_line()
+		local current_line_num = vim.api.nvim_win_get_cursor(0)[1]
+		local is_indented = line:match("^%s+- %[")
 		local new_line = ""
+
+		-- Toggle the current line
 		if line:find("- %[% %]") then
 			new_line = line:gsub("- %[% %]", "- [x]")
 		elseif line:find("- %[x%]") then
@@ -265,6 +269,69 @@ local function create_floating_window(opts)
 			new_line = line
 		end
 		vim.api.nvim_set_current_line(new_line)
+
+		-- If this is a main task (not indented)
+		if not is_indented and new_line:match("^- %[x%]") then
+			-- Mark all subtasks as done
+			local total_lines = vim.api.nvim_buf_line_count(buf)
+			for i = current_line_num + 1, total_lines do
+				local next_line = vim.api.nvim_buf_get_lines(buf, i - 1, i, false)[1]
+				if next_line and next_line:match("^%s+- %[% %]") then
+					local updated = next_line:gsub("- %[% %]", "- [x]")
+					vim.api.nvim_buf_set_lines(buf, i - 1, i, false, { updated })
+				elseif next_line and (next_line:match("^- %[") or next_line:match("^#") or next_line:match("^%S")) then
+					break
+				end
+			end
+		end
+
+		-- If this is a subtask (indented)
+		if is_indented then
+			-- Find the parent task
+			local parent_line_num = nil
+			for i = current_line_num - 1, 1, -1 do
+				local prev_line = vim.api.nvim_buf_get_lines(buf, i - 1, i, false)[1]
+				if prev_line and prev_line:match("^- %[") then
+					parent_line_num = i
+					break
+				end
+			end
+
+			if parent_line_num then
+				local parent_line = vim.api.nvim_buf_get_lines(buf, parent_line_num - 1, parent_line_num, false)[1]
+
+				-- Check all subtasks
+				local all_subtasks_done = true
+				local has_subtasks = false
+				local total_lines = vim.api.nvim_buf_line_count(buf)
+
+				for i = parent_line_num + 1, total_lines do
+					local check_line = vim.api.nvim_buf_get_lines(buf, i - 1, i, false)[1]
+					if check_line and check_line:match("^%s+- %[") then
+						has_subtasks = true
+						if check_line:match("^%s+- %[% %]") then
+							all_subtasks_done = false
+							break
+						end
+					elseif check_line and (check_line:match("^- %[") or check_line:match("^#") or check_line:match("^%S")) then
+						break
+					end
+				end
+
+				-- Update parent task based on subtask status
+				if has_subtasks then
+					if all_subtasks_done and parent_line:match("^- %[% %]") then
+						-- All subtasks done, mark parent as done
+						local updated_parent = parent_line:gsub("- %[% %]", "- [x]")
+						vim.api.nvim_buf_set_lines(buf, parent_line_num - 1, parent_line_num, false, { updated_parent })
+					elseif not all_subtasks_done and parent_line:match("^- %[x%]") then
+						-- Some subtask is pending, unmark parent
+						local updated_parent = parent_line:gsub("- %[x%]", "- [ ]")
+						vim.api.nvim_buf_set_lines(buf, parent_line_num - 1, parent_line_num, false, { updated_parent })
+					end
+				end
+			end
+		end
 	end
 
 	local insert_incomplete_task = function()
